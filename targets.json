@@ -1,0 +1,9 @@
+[
+  {
+    "targets": ["rrd:9170"],
+    "labels": {
+      "env": "prod",
+      "job": "rrd"
+    }
+  }
+]

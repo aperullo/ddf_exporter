@@ -1,0 +1,33 @@
+version: '3.7'
+services:
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - 9090:9090
+    volumes:
+      - type: bind
+        source: ./config.yaml
+        target: /config.yaml
+
+      - type: bind
+        source: ./targets.json
+        target: /targets.json
+    command: ["--config.file=/config.yaml"]
+
+  rrd:
+    build: ./
+    ports:
+      - 9170:9170
+
+    # TODO: where to put env variables for actual release
+    environment:
+      BIND_PORT: 9170
+      HOST_ADDRESS: "https://10.103.2.33:8993"
+      METRIC_PREFIX: "rrd_"
+
+
+    metric_prefix = 'rrd_'
+    host = 'https://10.103.2.33:8993'
+    metric_api_location = 'services/internal/metrics'
+    file_ext = '.json'
+
