@@ -25,9 +25,3 @@ services:
       HOST_ADDRESS: "https://10.103.2.33:8993"
       METRIC_PREFIX: "rrd_"
 
-
-    metric_prefix = 'rrd_'
-    host = 'https://10.103.2.33:8993'
-    metric_api_location = 'services/internal/metrics'
-    file_ext = '.json'
-

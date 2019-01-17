@@ -1,135 +1,164 @@
 
-
+from typing import Optional, Iterator
 from prometheus_client import start_http_server
-from prometheus_client.core import InfoMetricFamily, HistogramMetricFamily, CounterMetricFamily, GaugeMetricFamily, SummaryMetricFamily, REGISTRY
+from prometheus_client.core import GaugeMetricFamily, REGISTRY
 
-import json, requests, sys, time, os, signal, re
-
-
+import requests, sys, time, os, signal, re
+from requests import Timeout, TooManyRedirects
 
 
 class RRDCollector:
 
-    # The collect method is used whenever a scrape request from prometheus activates this script.
-    def collect(self):
+    def __init__(self):
 
         # TODO: get host name for labels
-        metric_prefix = 'rrd_'
-        host = 'https://10.103.2.33:8993'
-        metric_api_location = 'services/internal/metrics'
-        file_ext = '.json'
-
         # TODO: set headers
         # TODO: Env variable for system name
+        # TODO: Type hints
+        self.metric_prefix = os.getenv('METRIC_PREFIX', 'rrd_')
+        self.host = os.getenv('HOST_ADDRESS', 'https://10.103.2.33:8993') #TODO whats a sensible default?
+        self.metric_api_location = 'services/internal/metrics'
+        self.file_ext = '.json'
+
+        self.metric_endpoints = {}
+        self.metric_results = {}
+
+    # The collect method is used whenever a scrape request from prometheus activates this script.
+    def collect(self):
+        # get the endpoints
+        self.metric_endpoints = self.fetch_available_endpoints()
+
+        # fetch data from those endpoints
+        self.metric_results = self.populate_and_fetch_metrics(self.metric_endpoints, self.metric_prefix)
+
+        print(self.metric_results['catalog_queries'])
+
+        # yield the data as metrics
+        for metric_name in self.metric_endpoints.keys():
+            yield self.metric_results[metric_name]
 
 
-        # Offset is from the present, how many seconds into the past to fetch for that metric.
-        # TODO: if offset is less than 120, then there may be no record, as the server may still be collecting that info.
-        def _make_request(metric_name: str, offset=120):
-            """
-            Sends a get request based on a specified metric, and then returns the json.
+    # TODO: if offset is less than 120, then there may be no record, as the server may still be collecting that info.
+    def _make_request(self, metric_name: str, offset: Optional[int]=120) -> dict:
+        """
+        Sends a get request based on a specified metric, and then returns the json.
 
-            :param metric_name: The name of the metric, which will be used to lookup the corresponding endpoint
-            :param offset: From the present, how many seconds into the past to fetch data for that metric
-            :return: The dict/json representing the response
-            """
-            # TODO: find safer way to build url
-            query_url = ''
+        :param metric_name: The name of the metric, which will be used to lookup the corresponding endpoint
+        :param offset: From the present, how many seconds into the past to fetch data for that metric
+        :return: The dict/json representing the response
+        """
+        # TODO: find safer way to build url
+        query_url = ''
 
-            # If no offset, then we only want the base url.
-            if offset is not None:
-                query_url = ''.join([metrics_endpoints.get(metric_name),
-                                     file_ext,
-                                     '?dateOffset=',
-                                     str(offset)])
+        # If no offset, then we only want the base url.
+        if offset is not None:
+            query_url = ''.join([self.metric_endpoints.get(metric_name),
+                                 self.file_ext,
+                                 '?dateOffset=',
+                                 str(offset)])
 
-            query_url = '/'.join([host, metric_api_location, query_url])
+        query_url = '/'.join([self.host, self.metric_api_location, query_url])
 
-            download = None
+        download = None
+        try:
+            download = requests.get(query_url, verify=False)  # TODO make SSL cert valid, this is an insecure hack
+        except ConnectionError or Timeout or TooManyRedirects:
+            # DNS failure, refused connection, etc
+            # TODO: what to do here
+            return {}
 
-            try:
-                download = requests.get(query_url, verify=False)  # TODO make SSL cert valid, this is an insecure hack
-            except ConnectionRefusedError:
-                pass  # TODO: what to do here
+        return download.json()
 
-            metric_json = download.json()
+    def fetch_available_endpoints(self) -> dict:
+        """
+        Query the metrics endpoint to get available metrics, then process the result into a snake_case: camelCase
+        dictionary.
 
-            return metric_json
+        :return: a dict representing the snake_case: camelCase available endpoints
+        """
+        endpoints = list(self._make_request('', offset=None).keys())
 
-        def fetch_available_endpoints():
-            """
-            Query the metrics endpoint to get available metrics, then process the result into a snake_case: camelCase
-            dictionary.
+        available_endpoints = {}
+        for endpoint in endpoints:
+            available_endpoints[_camel_to_snake_case(endpoint)] = endpoint
 
-            :return: a dict representing the snake_case: camelCase available endpoints
-            """
+        return available_endpoints
 
-            endpoints = list(_make_request('', offset=None).keys())
+    def populate_and_fetch_metrics(self, available_endpoints: dict, prefix: str, labels: Optional[dict]=None) -> dict:
+        """
+        Query each available endpoint, retrieve it's value/values at that time, and store it into a results dictionary.
 
-            available_endpoints = {}
-            for endpoint in endpoints:
-                available_endpoints[_camel_to_snake_case(endpoint)] = endpoint
+        :param available_endpoints: dictionary of snake_case: camelCase strings representing metric endpoints
+        :param prefix: the prefix to be prepended to all metrics generated by this exporter
+        :param labels: an optional set of tags for to include on the metrics
+        :return: a dictionary of metrics with their corresponding values as retrieved from the endpoint
+        """
+        metric_results = {}
 
-            return available_endpoints
+        if labels is None:
+            labels = {}
 
-        def populate_and_fetch_metrics(available_endpoints, prefix, labels=None):
-            """
-            Query each available endpoint, retrieve it's value/values at that time, and store it into a results dictionary.
+        # for every available endpoint
+        for metric_name in available_endpoints.keys():
 
-            :param available_endpoints: dictionary of snake_case: camelCase strings representing metric endpoints
-            :param prefix: the prefix to be prepended to all metrics generated by this exporter
-            :param labels: an optional set of tags for to include on the metrics
-            :return: a dictionary of metrics with their corresponding values as retrieved from the endpoint
-            """
-            metric_results = {}
+            # Create an empty metric for that endpoint to hold its results
+            metric_results[metric_name] = GaugeMetricFamily(prefix + metric_name, metric_name)
 
-            if labels is None:
-                labels = {}
+            # Call to that endpoint and add all of its datapoints to the results.
+            # Empty metrics are automatically hidden in prometheus, so a endpoint that responded
+            # without data doesn't present an issue.
+            for data_point in _json_to_metric_generator(self._make_request(metric_name)):
+                # TODO: what should labels be?
+                # TODO: Timestamps are decided when prometheus receives them because the ones from RRD are considered too old
+                metric_results[metric_name].add_metric(labels=labels, value=data_point['value'])
+                # timestamp=datetime.datetime.strptime(data_point['timestamp'],
+                #                             '%b %d %Y %X').timetz())
 
-            # for every available endpoint
-            for metric_name in available_endpoints.keys():
-
-                # Create an empty metric for that endpoint to hold its results
-                metric_results[metric_name] = GaugeMetricFamily(prefix + metric_name, metric_name)
-
-                # Call to that endpoint and add all of its datapoints to the results.
-                for data_point in _json_to_metric_generator(_make_request(metric_name)):
-                    #TODO: what should labels be?
-                    #TODO: TImestamps are decided when prometheus receives them because the ones from RRD are considered too old
-                    metric_results[metric_name].add_metric(labels=labels, value=data_point['value'])
-                    # timestamp=datetime.datetime.strptime(data_point['timestamp'],
-                    #                             '%b %d %Y %X').timetz())
-
-            return metric_results
-
-        metrics_endpoints = fetch_available_endpoints()
-
-        metric_results = populate_and_fetch_metrics(metrics_endpoints, metric_prefix)
-
-        print(metric_results['catalog_queries'])
-
-        for metric_name in metrics_endpoints.keys():
-            yield metric_results[metric_name]
+        return metric_results
 
 
-def _json_to_metric_generator(json_response: dict):
+def _json_to_metric_generator(json_response: dict) -> Iterator[dict]:
     """
+    The returned JSON may or may not have multiple data rows, this helper function makes the results
+    iterable so that these multiple rows can be handled without checking how many there are in advance.
+
+    :param: json_response, a dict object representing the jason file. Its structure is:
+    {
+       "data":[
+          {
+             "value": flt,
+             "timestamp": str
+          },
+          {
+             "value": flt,
+             "timestamp": str
+          },
+          ...
+       ],
+       "title": str,
+       "totalCount": int
+    }
+
     :rtype: dict
     """
     # assembled_metric = Metric()
 
     # see if there are any data tags inside the response
     data = json_response.get('data')
-    # print(data)
-    if (data == None):
-        yield
+    if data is None:
+        return
 
     for data_point in data:
+        print(data_point)
         yield data_point
 
 
-def _camel_to_snake_case(string: str):
+def _camel_to_snake_case(string: str) -> str:
     """
+    converts camelCase to snake_case.
+    snake_case is used for metric names.
+    camelCase is used for endpoint names.
+
     :rtype: str
     """
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', string)
@@ -139,10 +168,11 @@ def _camel_to_snake_case(string: str):
 def sigterm_handler(_signo, _stack_frame):
     sys.exit(0)
 
+
 if __name__ == '__main__':
     # Ensure we have something to export
     #TODO: binding port
-    #start_http_server(int(os.getenv('BIND_PORT')))
+    start_http_server(int(os.getenv('BIND_PORT')))
     REGISTRY.register(RRDCollector())
 
     signal.signal(signal.SIGTERM, sigterm_handler)
