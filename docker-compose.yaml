@@ -22,6 +22,14 @@ services:
     # TODO: where to put env variables for actual release
     environment:
       BIND_PORT: 9170
-      HOST_ADDRESS: "https://10.103.2.33:8993"
+      HOST_ADDRESS: "https://10.0.75.1"
+      HOST_PORT: 8993
       METRIC_PREFIX: "rrd_"
+      METRIC_API_LOCATION: "services/internal/metrics"
+      SECURE: "False"
+
+    volumes:
+      - type: bind
+        source: ./cacert.pem
+        target: /cacerts/cert.pem
 

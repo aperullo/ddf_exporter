@@ -1,4 +1,3 @@
-
 from typing import Optional, Iterator
 from prometheus_client import start_http_server
 from prometheus_client.core import GaugeMetricFamily, REGISTRY
@@ -11,13 +10,14 @@ class RRDCollector:
 
     def __init__(self):
 
-        # TODO: get host name for labels
-        # TODO: set headers
-        # TODO: Env variable for system name
-        # TODO: Type hints
         self.metric_prefix = os.getenv('METRIC_PREFIX', 'rrd_')
-        self.host = os.getenv('HOST_ADDRESS', 'https://10.103.2.33:8993') #TODO whats a sensible default?
-        self.metric_api_location = 'services/internal/metrics'
+        self.host = os.getenv('HOST_ADDRESS', 'https://localhost')
+        self.host_port = os.getenv('HOST_PORT', 8993)
+        self.metric_api_location = os.getenv('METRIC_API_LOCATION',
+                                             'services/internal/metrics')
+        self.secure = os.getenv('SECURE', "True")
+        self.ca_cert_path = os.getenv('CA_CERT_PATH', '/certs/ca.pem')
+
         self.file_ext = '.json'
 
         self.metric_endpoints = {}
@@ -29,17 +29,17 @@ class RRDCollector:
         self.metric_endpoints = self.fetch_available_endpoints()
 
         # fetch data from those endpoints
-        self.metric_results = self.populate_and_fetch_metrics(self.metric_endpoints, self.metric_prefix)
-
-        print(self.metric_results['catalog_queries'])
+        self.metric_results = self.populate_and_fetch_metrics(
+            self.metric_endpoints,
+            self.metric_prefix,
+            labels={'host': self.host})
 
         # yield the data as metrics
         for metric_name in self.metric_endpoints.keys():
             yield self.metric_results[metric_name]
 
-
     # TODO: if offset is less than 120, then there may be no record, as the server may still be collecting that info.
-    def _make_request(self, metric_name: str, offset: Optional[int]=120) -> dict:
+    def _make_request(self, metric_name: str, offset: Optional[int] = 120) -> dict:
         """
         Sends a get request based on a specified metric, and then returns the json.
 
@@ -47,25 +47,48 @@ class RRDCollector:
         :param offset: From the present, how many seconds into the past to fetch data for that metric
         :return: The dict/json representing the response
         """
-        # TODO: find safer way to build url
-        query_url = ''
+
+        query_url = '{host}:{host_port}/{api_location}/'.format(
+            **{
+                'host': self.host,
+                'host_port': self.host_port,
+                'api_location': self.metric_api_location
+            })
 
         # If no offset, then we only want the base url.
         if offset is not None:
-            query_url = ''.join([self.metric_endpoints.get(metric_name),
-                                 self.file_ext,
-                                 '?dateOffset=',
-                                 str(offset)])
-
-        query_url = '/'.join([self.host, self.metric_api_location, query_url])
+            query_url += '{metric_endpoint}{file_ext}?dateOffset={offset}'.format(
+                **{
+                    'metric_endpoint': self.metric_endpoints.get(metric_name),
+                    'file_ext': self.file_ext,
+                    'offset': str(offset)
+                })
 
         download = None
-        try:
-            download = requests.get(query_url, verify=False)  # TODO make SSL cert valid, this is an insecure hack
-        except ConnectionError or Timeout or TooManyRedirects:
-            # DNS failure, refused connection, etc
-            # TODO: what to do here
-            return {}
+        print(query_url)
+        with requests.Session() as session:
+            try:
+                # User wants to operate insecurely, or the host is not an https request.
+                # Have to hardcode strings because dockerfiles cannot handle booleans
+                if self.secure == "False" or not query_url.startswith("https://"):
+                    download = session.get(query_url, verify=False)
+                    # shows a warning if using HTTPS, does not do so if using http.
+
+                # If user wants to operate securely and they provided a certificate in the certs directory.
+                elif self.secure == "True" and os.path.isfile(self.ca_cert_path):
+                    download = session.get(query_url, verify=self.ca_cert_path)
+
+                # If the user wants to operate securely but didn't provide a certificate, we can't get metrics.
+                else:
+                    raise FileNotFoundError(
+                        'Secure metric connections are enabled but could not locate cert.pem inside of cacerts directory. '
+                        'Either set environment variable SECURE to \"False\", or place a certificate named cert.pem into cacerts'
+                    )
+
+            except ConnectionError or ConnectionRefusedError or ConnectionAbortedError or Timeout or TooManyRedirects:
+                # DNS failure, refused connection, etc
+                # TODO: what to do here
+                return {}
 
         return download.json()
 
@@ -84,7 +107,10 @@ class RRDCollector:
 
         return available_endpoints
 
-    def populate_and_fetch_metrics(self, available_endpoints: dict, prefix: str, labels: Optional[dict]=None) -> dict:
+    def populate_and_fetch_metrics(self,
+                                   available_endpoints: dict,
+                                   prefix: str,
+                                   labels: Optional[dict] = None) -> dict:
         """
         Query each available endpoint, retrieve it's value/values at that time, and store it into a results dictionary.
 
@@ -102,17 +128,14 @@ class RRDCollector:
         for metric_name in available_endpoints.keys():
 
             # Create an empty metric for that endpoint to hold its results
-            metric_results[metric_name] = GaugeMetricFamily(prefix + metric_name, metric_name)
+            metric_results[metric_name] = GaugeMetricFamily(
+                prefix + metric_name, metric_name, labels=labels.keys())
 
             # Call to that endpoint and add all of its datapoints to the results.
-            # Empty metrics are automatically hidden in prometheus, so a endpoint that responded
+            # Empty metrics are automatically hidden in prometheus, so an endpoint that responded
             # without data doesn't present an issue.
             for data_point in _json_to_metric_generator(self._make_request(metric_name)):
-                # TODO: what should labels be?
-                # TODO: Timestamps are decided when prometheus receives them because the ones from RRD are considered too old
-                metric_results[metric_name].add_metric(labels=labels, value=data_point['value'])
-                # timestamp=datetime.datetime.strptime(data_point['timestamp'],
-                #                             '%b %d %Y %X').timetz())
+                metric_results[metric_name].add_metric(labels=list(labels.values()), value=data_point['value'])
 
         return metric_results
 
@@ -120,7 +143,7 @@ class RRDCollector:
 def _json_to_metric_generator(json_response: dict) -> Iterator[dict]:
     """
     The returned JSON may or may not have multiple data rows, this helper function makes the results
-    iterable so that these multiple rows can be handled without checking how many there are in advance.
+    iterable so that these multiple rows can be handled in a loop.
 
     :param: json_response, a dict object representing the jason file. Its structure is:
     {
@@ -145,11 +168,10 @@ def _json_to_metric_generator(json_response: dict) -> Iterator[dict]:
 
     # see if there are any data tags inside the response
     data = json_response.get('data')
-    if data is None:
+    if data is None or len(data) == 0:
         return
 
     for data_point in data:
-        print(data_point)
         yield data_point
 
 
@@ -171,7 +193,7 @@ def sigterm_handler(_signo, _stack_frame):
 
 if __name__ == '__main__':
     # Ensure we have something to export
-    #TODO: binding port
+    # TODO: binding port
     start_http_server(int(os.getenv('BIND_PORT')))
     REGISTRY.register(RRDCollector())
 
