@@ -14,17 +14,16 @@ services:
         target: /targets.json
     command: ["--config.file=/config.yaml"]
 
-  rrd:
+  ddfexporter:
     build: ./
     ports:
       - 9170:9170
 
-    # TODO: where to put env variables for actual release
     environment:
       BIND_PORT: 9170
       HOST_ADDRESS: "https://10.0.75.1"
       HOST_PORT: 8993
-      METRIC_PREFIX: "rrd_"
+      METRIC_PREFIX: "ddf_"
       METRIC_API_LOCATION: "services/internal/metrics"
       SECURE: "False"
 

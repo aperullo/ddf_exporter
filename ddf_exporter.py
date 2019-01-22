@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from typing import Optional, Iterator
 from prometheus_client import start_http_server
 from prometheus_client.core import GaugeMetricFamily, REGISTRY
@@ -6,11 +8,11 @@ import requests, sys, time, os, signal, re
 from requests import Timeout, TooManyRedirects
 
 
-class RRDCollector:
+class DDFCollector:
 
     def __init__(self):
 
-        self.metric_prefix = os.getenv('METRIC_PREFIX', 'rrd_')
+        self.metric_prefix = os.getenv('METRIC_PREFIX', 'ddf_')
         self.host = os.getenv('HOST_ADDRESS', 'https://localhost')
         self.host_port = os.getenv('HOST_PORT', 8993)
         self.metric_api_location = os.getenv('METRIC_API_LOCATION',
@@ -38,7 +40,7 @@ class RRDCollector:
         for metric_name in self.metric_endpoints.keys():
             yield self.metric_results[metric_name]
 
-    # TODO: if offset is less than 120, then there may be no record, as the server may still be collecting that info.
+    # If offset is less than 120, then there may be no record, as the server may still be collecting that info.
     def _make_request(self, metric_name: str, offset: Optional[int] = 120) -> dict:
         """
         Sends a get request based on a specified metric, and then returns the json.
@@ -65,7 +67,6 @@ class RRDCollector:
                 })
 
         download = None
-        print(query_url)
         with requests.Session() as session:
             try:
                 # User wants to operate insecurely, or the host is not an https request.
@@ -82,12 +83,12 @@ class RRDCollector:
                 else:
                     raise FileNotFoundError(
                         'Secure metric connections are enabled but could not locate cert.pem inside of cacerts directory. '
-                        'Either set environment variable SECURE to \"False\", or place a certificate named cert.pem into cacerts'
+                        'Either set environment variable SECURE to \"False\", or place a certificate at the path listed in the CA_CERT_PATH env variable.'
+                        'See readme for more details.'
                     )
 
             except ConnectionError or ConnectionRefusedError or ConnectionAbortedError or Timeout or TooManyRedirects:
                 # DNS failure, refused connection, etc
-                # TODO: what to do here
                 return {}
 
         return download.json()
@@ -164,7 +165,6 @@ def _json_to_metric_generator(json_response: dict) -> Iterator[dict]:
 
     :rtype: dict
     """
-    # assembled_metric = Metric()
 
     # see if there are any data tags inside the response
     data = json_response.get('data')
@@ -193,9 +193,8 @@ def sigterm_handler(_signo, _stack_frame):
 
 if __name__ == '__main__':
     # Ensure we have something to export
-    # TODO: binding port
     start_http_server(int(os.getenv('BIND_PORT')))
-    REGISTRY.register(RRDCollector())
+    REGISTRY.register(DDFCollector())
 
     signal.signal(signal.SIGTERM, sigterm_handler)
     while True:

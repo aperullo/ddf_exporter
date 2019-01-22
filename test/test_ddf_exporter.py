@@ -1,11 +1,11 @@
 import unittest
 from unittest.mock import patch, call
 import os
-import rrd_exporter
+import ddf_exporter
 import prometheus_client
 
 
-class TestRrdExporter(unittest.TestCase):
+class TestDdfExporter(unittest.TestCase):
 
     def _set_env_var(self, var: str, value):
         os.environ[var] = value
@@ -66,7 +66,7 @@ class TestRrdExporter(unittest.TestCase):
 
         os.environ['SECURE'] = "False"
 
-        exp = rrd_exporter.RRDCollector()
+        exp = ddf_exporter.DDFCollector()
 
         # test_acquire_endpoints_request
         json_data = exp._make_request('', offset=None)
@@ -94,7 +94,7 @@ class TestRrdExporter(unittest.TestCase):
 
         os.environ['SECURE'] = "True"
 
-        exp = rrd_exporter.RRDCollector()
+        exp = ddf_exporter.DDFCollector()
 
         # test_acquire_endpoints_request
         json_data = exp._make_request('', offset=None)
@@ -122,7 +122,7 @@ class TestRrdExporter(unittest.TestCase):
 
         os.environ['SECURE'] = "True"
 
-        exp = rrd_exporter.RRDCollector()
+        exp = ddf_exporter.DDFCollector()
 
         # test no cert response
         self.assertRaises(FileNotFoundError, exp._make_request, 'connection_error')
@@ -131,15 +131,15 @@ class TestRrdExporter(unittest.TestCase):
     def test__json_to_metric_generator(self):
 
         # test empty dict
-        gen = rrd_exporter._json_to_metric_generator({})
+        gen = ddf_exporter._json_to_metric_generator({})
         self.assertRaises(StopIteration, next, gen)
 
         # test dict with no data attribute
-        gen = rrd_exporter._json_to_metric_generator({'title': 'Empty'})
+        gen = ddf_exporter._json_to_metric_generator({'title': 'Empty'})
         self.assertRaises(StopIteration, next, gen)
 
         # test dict with 1 result
-        gen = rrd_exporter._json_to_metric_generator({
+        gen = ddf_exporter._json_to_metric_generator({
                 'title': '1data',
                 'data': [{'value': 0.0, 'timestamp': 'Jan 15 2019 12:07:00'}]})
 
@@ -148,7 +148,7 @@ class TestRrdExporter(unittest.TestCase):
         self.assertRaises(StopIteration, next, gen)
 
         # test dict with multiple results
-        gen = rrd_exporter._json_to_metric_generator({
+        gen = ddf_exporter._json_to_metric_generator({
             'title': '1data',
             'data': [{'value': 0.0, 'timestamp': 'Jan 15 2019 12:07:00'},
                     {'value': 0.3, 'timestamp': 'Jan 15 2019 12:08:00'}]
@@ -163,18 +163,18 @@ class TestRrdExporter(unittest.TestCase):
     def test_fetch_available_endpoints(self):
 
         # test with no responses
-        with patch.object(rrd_exporter.RRDCollector, '_make_request', return_value={}) as mock_make_request:
-            exp = rrd_exporter.RRDCollector()
+        with patch.object(ddf_exporter.DDFCollector, '_make_request', return_value={}) as mock_make_request:
+            exp = ddf_exporter.DDFCollector()
             self.assertDictEqual(exp.fetch_available_endpoints(), {})
 
         # test with 1 response
-        with patch.object(rrd_exporter.RRDCollector, '_make_request', return_value={'fakeItemA': 'a'}) as mock_make_request:
-            exp = rrd_exporter.RRDCollector()
+        with patch.object(ddf_exporter.DDFCollector, '_make_request', return_value={'fakeItemA': 'a'}) as mock_make_request:
+            exp = ddf_exporter.DDFCollector()
             self.assertDictEqual(exp.fetch_available_endpoints(), {'fake_item_a': 'fakeItemA'})
 
         # Test with multiple responses
-        with patch.object(rrd_exporter.RRDCollector, '_make_request', return_value={'fakeItemA': 'a', 'fakeItemB': 'b'}) as mock_make_request:
-            exp = rrd_exporter.RRDCollector()
+        with patch.object(ddf_exporter.DDFCollector, '_make_request', return_value={'fakeItemA': 'a', 'fakeItemB': 'b'}) as mock_make_request:
+            exp = ddf_exporter.DDFCollector()
             self.assertDictEqual(exp.fetch_available_endpoints(), {'fake_item_a': 'fakeItemA', 'fake_item_b': 'fakeItemB'})
 
 
@@ -201,10 +201,10 @@ class TestRrdExporter(unittest.TestCase):
         return options.get(args[0], 'no value found')
 
 
-    @patch('rrd_exporter.RRDCollector._make_request', side_effect=mocked_make_request)
+    @patch('ddf_exporter.DDFCollector._make_request', side_effect=mocked_make_request)
     def test_populate_and_fetch_metrics(self, mock_requests):
 
-        exp = rrd_exporter.RRDCollector()
+        exp = ddf_exporter.DDFCollector()
 
         # test empty dict
         metrics = exp.populate_and_fetch_metrics({}, self.metric_prefix)
@@ -212,65 +212,64 @@ class TestRrdExporter(unittest.TestCase):
 
         # test metric without labels
         with patch.object(prometheus_client.metrics_core.GaugeMetricFamily,'add_metric') as mock_add_metric:
-            metrics = exp.populate_and_fetch_metrics({'no_label': 'no_label'},
-                                                     self.metric_prefix)
+            exp.populate_and_fetch_metrics({'no_label': 'no_label'},
+                                            self.metric_prefix)
 
         mock_add_metric.assert_called_with(labels=[], value=0.0)
 
         # test metric with labels
         with patch.object(prometheus_client.metrics_core.GaugeMetricFamily,'add_metric') as mock_add_metric:
-            # TODO: metrics is an unnessecary variable and is always empty
-            metrics = exp.populate_and_fetch_metrics({'yes_label': 'yes_label'},
-                                                     self.metric_prefix,
-                                                     {'host_label': 'machine_yes_label'})
+            exp.populate_and_fetch_metrics({'yes_label': 'yes_label'},
+                                            self.metric_prefix,
+                                            {'host_label': 'machine_yes_label'})
 
         mock_add_metric.assert_called_with(labels=['machine_yes_label'], value=1.0)
 
         # test 1 metric; 0 sample
         with patch.object(prometheus_client.metrics_core.GaugeMetricFamily, 'add_metric') as mock_add_metric:
-            metrics = exp.populate_and_fetch_metrics({'1_0': '1_0'},
-                                                     self.metric_prefix,
-                                                     {'host_label': 'machine_1_0'})
+            exp.populate_and_fetch_metrics({'1_0': '1_0'},
+                                            self.metric_prefix,
+                                            {'host_label': 'machine_1_0'})
 
         mock_add_metric.assert_not_called()
 
         # test 1 metric; 1 sample
         with patch.object(prometheus_client.metrics_core.GaugeMetricFamily, 'add_metric') as mock_add_metric:
-            metrics = exp.populate_and_fetch_metrics({'1_1': '1_1'},
-                                                     self.metric_prefix,
-                                                     {'host_label': 'machine_1_1'})
+            exp.populate_and_fetch_metrics({'1_1': '1_1'},
+                                            self.metric_prefix,
+                                            {'host_label': 'machine_1_1'})
 
         mock_add_metric.assert_called_with(labels=['machine_1_1'], value=1.0)
 
         # test 1 metric; multiple samples
         with patch.object(prometheus_client.metrics_core.GaugeMetricFamily, 'add_metric') as mock_add_metric:
-            metrics = exp.populate_and_fetch_metrics({'1_2': '1_2'},
-                                                     self.metric_prefix,
-                                                     {'host_label': 'machine_1_2'})
+            exp.populate_and_fetch_metrics({'1_2': '1_2'},
+                                            self.metric_prefix,
+                                            {'host_label': 'machine_1_2'})
 
         calls = [call(labels=['machine_1_2'], value=1.0), call(labels=['machine_1_2'], value=2.0)]
         mock_add_metric.assert_has_calls(calls)
 
         # test multiple metric; 0 sample
         with patch.object(prometheus_client.metrics_core.GaugeMetricFamily, 'add_metric') as mock_add_metric:
-            metrics = exp.populate_and_fetch_metrics({'2_0_metric_1': '2_0_metric_1',
-                                                      '2_0_metric_2': '2_0_metric_2'},
-                                                     self.metric_prefix,
-                                                     {'host_label': 'machine_2_0'})
+            exp.populate_and_fetch_metrics({'2_0_metric_1': '2_0_metric_1',
+                                            '2_0_metric_2': '2_0_metric_2'},
+                                            self.metric_prefix,
+                                            {'host_label': 'machine_2_0'})
 
         mock_add_metric.assert_not_called()
 
         # test multiple metric; 1 sample
         with patch.object(prometheus_client.metrics_core.GaugeMetricFamily, 'add_metric') as mock_add_metric:
-            metrics = exp.populate_and_fetch_metrics({'2_1_metric_1': '2_1_metric_1',
-                                                      '2_1_metric_2': '2_1_metric_2'},
-                                                     self.metric_prefix,
-                                                     {'host_label': 'machine_2_1'})
+            exp.populate_and_fetch_metrics({'2_1_metric_1': '2_1_metric_1',
+                                            '2_1_metric_2': '2_1_metric_2'},
+                                            self.metric_prefix,
+                                            {'host_label': 'machine_2_1'})
 
         calls = [call(labels=['machine_2_1'], value=1.0), call(labels=['machine_2_1'], value=2.0)]
         mock_add_metric.assert_has_calls(calls)
         # Its hard to tell because we are patching the add_metric method, but the metric_results would end up looking
-        # similiar to:
+        # similar to:
         # {
         #  '2_1_metric_1':
         # 	Metric(test_case_2_1_metric_1, ...,
@@ -310,7 +309,7 @@ class TestRrdExporter(unittest.TestCase):
         #                    labels={'host_label': 'machine_2_1'},
         #                    value=2.0)
         #             ]
-        #            ),
+        #     ),
         # '2_2_metric_2':
         #     Metric(test_case_2_2_metric_2, ...,
         #            [Sample(name='test_case_2_2_metric_2',
@@ -326,27 +325,27 @@ class TestRrdExporter(unittest.TestCase):
     def test__camel_to_snake_case(self):
 
         # test empty string
-        ans = rrd_exporter._camel_to_snake_case('')
+        ans = ddf_exporter._camel_to_snake_case('')
         self.assertEqual(ans, '')
 
         # test camel case string
-        ans = rrd_exporter._camel_to_snake_case('camelCaseString')
+        ans = ddf_exporter._camel_to_snake_case('camelCaseString')
         self.assertEqual(ans, 'camel_case_string')
 
         # test upper camel case string
-        ans = rrd_exporter._camel_to_snake_case('CamelCaseString')
+        ans = ddf_exporter._camel_to_snake_case('CamelCaseString')
         self.assertEqual(ans, 'camel_case_string')
 
         # test snake case string
-        ans = rrd_exporter._camel_to_snake_case('snake_case_string')
+        ans = ddf_exporter._camel_to_snake_case('snake_case_string')
         self.assertEqual(ans, 'snake_case_string')
 
         # test numbers in string
-        ans = rrd_exporter._camel_to_snake_case('a1B2c34D')
+        ans = ddf_exporter._camel_to_snake_case('a1B2c34D')
         self.assertEqual(ans, 'a1_b2c34_d')
 
         # test all caps string
-        ans = rrd_exporter._camel_to_snake_case('consecutiveUPPERCase')
+        ans = ddf_exporter._camel_to_snake_case('consecutiveUPPERCase')
         self.assertEqual(ans, 'consecutive_upper_case')
 
 
