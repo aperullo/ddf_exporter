@@ -1,9 +1,0 @@
-[
-  {
-    "targets": ["ddfexporter:9170"],
-    "labels": {
-      "env": "prod",
-      "job": "ddfexporter"
-    }
-  }
-]
