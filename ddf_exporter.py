@@ -87,8 +87,9 @@ class DDFCollector:
                         'See readme for more details.'
                     )
 
-            except ConnectionError or ConnectionRefusedError or ConnectionAbortedError or Timeout or TooManyRedirects:
+            except requests.RequestException as e:
                 # DNS failure, refused connection, etc
+                print("Error: " + str(e))
                 return {}
 
         return download.json()
@@ -193,7 +194,7 @@ def sigterm_handler(_signo, _stack_frame):
 
 if __name__ == '__main__':
     # Ensure we have something to export
-    start_http_server(int(os.getenv('BIND_PORT')))
+    start_http_server(int(os.getenv('BIND_PORT', 9170)))
     REGISTRY.register(DDFCollector())
 
     signal.signal(signal.SIGTERM, sigterm_handler)
